@@ -18,32 +18,57 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Set up Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          python3-pip build-essential git python3 python3-dev \
-          ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev \
-          libsdl2-ttf-dev libportmidi-dev libswscale-dev \
-          libavformat-dev libavcodec-dev zlib1g-dev \
-          openjdk-17-jdk autoconf automake libtool pkg-config \
-          unzip wget
+          python3-pip \
+          build-essential \
+          git \
+          python3 \
+          python3-dev \
+          ffmpeg \
+          libsdl2-dev \
+          libsdl2-image-dev \
+          libsdl2-mixer-dev \
+          libsdl2-ttf-dev \
+          libportmidi-dev \
+          libswscale-dev \
+          libavformat-dev \
+          libavcodec-dev \
+          zlib1g-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config \
+          unzip \
+          wget
+        java -version
 
     - name: Setup Android SDK
       run: |
-        mkdir -p $HOME/android-sdk
-        cd $HOME/android-sdk
+        echo "Setting up Android SDK..."
+        mkdir -p $HOME/android-sdk/cmdline-tools
+        cd $HOME/android-sdk/cmdline-tools
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
         unzip -q cmdtools.zip
-        mkdir -p cmdline-tools/latest
-        mv cmdline-tools/bin cmdline-tools/lib cmdline-tools/NOTICE.txt cmdline-tools/source.properties cmdline-tools/latest/ 2>/dev/null || true
+        mv cmdline-tools latest
         export ANDROID_HOME=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-        yes | sdkmanager --licenses || true
+        echo "Accepting licenses..."
+        yes | sdkmanager --licenses > /dev/null 2>&1 || true
+        echo "Installing SDK components..."
         sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0"
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
         echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+        echo "Android SDK setup complete"
 
     - name: Install Python dependencies
       run: |
@@ -52,20 +77,45 @@ jobs:
 
     - name: Prepare buildozer.spec
       run: |
+        echo "Preparing buildozer.spec..."
         if [ -f "buildozer_simple.spec" ]; then
           cp buildozer_simple.spec buildozer.spec
+          echo "Copied buildozer_simple.spec to buildozer.spec"
         fi
+        # Force correct versions
         sed -i 's/requirements\s*=.*/requirements = python3==3.11.9,kivy==2.3.1/' buildozer.spec
         sed -i 's/android\.ndk\s*=.*/android.ndk = 25b/' buildozer.spec
         sed -i 's/android\.api\s*=.*/android.api = 31/' buildozer.spec
+        echo "=== buildozer.spec contents ==="
         cat buildozer.spec
+        echo "================================"
 
     - name: Build APK
-      run: buildozer -v android debug
+      run: |
+        echo "Starting APK build..."
+        echo "This will take 20-30 minutes..."
+        buildozer -v android debug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: xuankongfeixing-apk
         path: bin/*.apk
         retention-days: 30
+
+    - name: Display build info
+      if: success()
+      run: |
+        echo "=== Build Complete ==="
+        ls -lh bin/*.apk
+        echo "APK uploaded to Artifacts"
+
+    - name: Display error info
+      if: failure()
+      run: |
+        echo "=== Build Failed ==="
+        echo "Checking for logs..."
+        find .buildozer -name "*.log" -type f 2>/dev/null | head -5
+        echo "Last 50 lines of build log:"
+        find .buildozer -name "*.log" -type f -exec tail -50 {} \; 2>/dev/null | tail -50
