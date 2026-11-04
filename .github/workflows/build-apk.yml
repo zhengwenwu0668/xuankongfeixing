@@ -35,25 +35,6 @@ jobs:
           autoconf automake libtool pkg-config unzip wget
         java -version
 
-    - name: Setup Android SDK with AIDL
-      run: |
-        mkdir -p $HOME/android-sdk/cmdline-tools
-        cd $HOME/android-sdk/cmdline-tools
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
-        unzip -q cmdtools.zip
-        mv cmdline-tools latest
-        export ANDROID_HOME=$HOME/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-        yes | sdkmanager --licenses > /dev/null 2>&1 || true
-        sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0"
-        sdkmanager "aidl" 2>/dev/null || echo "AIDL package not available separately"
-        echo "Checking for AIDL..."
-        find $ANDROID_HOME -name "aidl" -type f 2>/dev/null || echo "AIDL not found in SDK"
-        ls -la $ANDROID_HOME/build-tools/31.0.0/ 2>/dev/null | grep aidl || echo "AIDL not in build-tools"
-        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
-        echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
@@ -67,15 +48,47 @@ jobs:
         sed -i 's/requirements\s*=.*/requirements = python3==3.11.9,kivy==2.3.1/' buildozer.spec
         sed -i 's/android\.ndk\s*=.*/android.ndk = 25b/' buildozer.spec
         sed -i 's/android\.api\s*=.*/android.api = 31/' buildozer.spec
-        sed -i 's/android\.sdk\s*=.*/android.sdk = 31/' buildozer.spec
+        echo "=== buildozer.spec ==="
         cat buildozer.spec
 
-    - name: Build APK
-      env:
-        ANDROID_HOME: ${{ env.ANDROID_HOME }}
+    - name: Initialize buildozer (download SDK)
       run: |
-        echo "ANDROID_HOME=$ANDROID_HOME"
-        echo "Starting build..."
+        echo "Initializing buildozer (will download SDK)..."
+        buildozer android debug 2>&1 | tee init.log || true
+        echo "Initialization complete (expected to fail)"
+
+    - name: Install AIDL
+      run: |
+        echo "Finding buildozer SDK location..."
+        BUILD_DIR=$(find ~/.buildozer -type d -name "build-tools" 2>/dev/null | head -1)
+        echo "Build tools directory: $BUILD_DIR"
+        
+        if [ -z "$BUILD_DIR" ]; then
+          echo "Build tools not found, trying alternative location..."
+          BUILD_DIR=$(find /home/runner -type d -name "build-tools" 2>/dev/null | head -1)
+          echo "Alternative location: $BUILD_DIR"
+        fi
+        
+        if [ -n "$BUILD_DIR" ]; then
+          SDK_ROOT=$(dirname "$BUILD_DIR")
+          echo "SDK root: $SDK_ROOT"
+          
+          echo "Installing AIDL..."
+          yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0" 2>/dev/null || \
+          yes | $SDK_ROOT/tools/bin/sdkmanager "build-tools;31.0.0" 2>/dev/null || \
+          echo "Trying to install AIDL manually..."
+          
+          echo "Checking for AIDL in build-tools..."
+          find $BUILD_DIR -name "aidl" -type f 2>/dev/null
+          ls -la $BUILD_DIR/*/aidl 2>/dev/null || echo "AIDL not found yet"
+        else
+          echo "ERROR: Could not find SDK directory"
+          find / -name "sdkmanager" -type f 2>/dev/null | head -5
+        fi
+
+    - name: Build APK (final attempt)
+      run: |
+        echo "Starting final build..."
         buildozer -v android debug
 
     - name: Upload APK
@@ -90,5 +103,8 @@ jobs:
       if: failure()
       run: |
         echo "=== Build Failed ==="
+        echo "Checking logs..."
+        find . -name "*.log" -type f -newer /tmp 2>/dev/null | head -10
         find .buildozer -name "*.log" -type f 2>/dev/null | head -5
-        find .buildozer -name "*.log" -type f -exec tail -50 {} \; 2>/dev/null | tail -50
+        echo "Last 100 lines:"
+        find .buildozer -name "*.log" -type f -exec tail -100 {} \; 2>/dev/null | tail -100
