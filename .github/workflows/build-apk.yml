@@ -1,95 +1,85 @@
-name: Build Android APK
+        echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+        echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+        echo "$SDK_ROOT/build-tools/31.0.0" >> $GITHUB_PATH
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Set up Java 17
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-
-    - name: Install system dependencies
+    - name: Initialize buildozer
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          python3-pip build-essential git python3 python3-dev \
-          ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev \
-          libsdl2-ttf-dev libportmidi-dev libswscale-dev \
-          libavformat-dev libavcodec-dev zlib1g-dev \
-          autoconf automake libtool pkg-config unzip wget
-        java -version
-
-    - name: Install Python dependencies
-      run: |
-        pip install --upgrade pip
-        pip install "buildozer==1.6.0" "cython==0.29.33"
-
-    - name: Prepare buildozer.spec
-      run: |
-        if [ -f "buildozer_simple.spec" ]; then
-          cp buildozer_simple.spec buildozer.spec
-        fi
-        sed -i 's/requirements\s*=.*/requirements = python3==3.11.9,kivy==2.3.1/' buildozer.spec
-        sed -i 's/android\.ndk\s*=.*/android.ndk = 25b/' buildozer.spec
-        sed -i 's/android\.api\s*=.*/android.api = 31/' buildozer.spec
-        echo "=== buildozer.spec ==="
-        cat buildozer.spec
-
-    - name: Initialize buildozer (download SDK)
-      run: |
-        echo "Initializing buildozer (will download SDK)..."
+        echo "=== Initializing buildozer ==="
+        echo "This will download NDK and other dependencies..."
         buildozer android debug 2>&1 | tee init.log || true
-        echo "Initialization complete (expected to fail)"
+        echo "Initialization complete"
 
-    - name: Install AIDL
+    - name: Install AIDL and check SDK
+    - name: Copy SDK to buildozer location
       run: |
-        echo "Finding buildozer SDK location..."
+        echo "=== Checking SDK installation ==="
         BUILD_DIR=$(find ~/.buildozer -type d -name "build-tools" 2>/dev/null | head -1)
-        echo "Build tools directory: $BUILD_DIR"
-        
-        if [ -z "$BUILD_DIR" ]; then
-          echo "Build tools not found, trying alternative location..."
-          BUILD_DIR=$(find /home/runner -type d -name "build-tools" 2>/dev/null | head -1)
-          echo "Alternative location: $BUILD_DIR"
-        fi
+        echo "Build tools: $BUILD_DIR"
+        echo "=== Copying SDK to buildozer location ==="
+        BUILD_SDK=$HOME/.buildozer/android/platform/android-sdk
         
         if [ -n "$BUILD_DIR" ]; then
           SDK_ROOT=$(dirname "$BUILD_DIR")
           echo "SDK root: $SDK_ROOT"
+          ls -la $SDK_ROOT/
           
           echo "Installing AIDL..."
-          yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0" 2>/dev/null || \
-          yes | $SDK_ROOT/tools/bin/sdkmanager "build-tools;31.0.0" 2>/dev/null || \
-          echo "Trying to install AIDL manually..."
+          yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0" 2>&1 || true
           
-          echo "Checking for AIDL in build-tools..."
-          find $BUILD_DIR -name "aidl" -type f 2>/dev/null
-          ls -la $BUILD_DIR/*/aidl 2>/dev/null || echo "AIDL not found yet"
+          echo "Checking AIDL..."
+          find $BUILD_DIR -name "aidl" 2>/dev/null
+        if [ -d "$BUILD_SDK" ]; then
+          echo "Buildozer SDK exists at: $BUILD_SDK"
+          ls -la $BUILD_SDK/
         else
-          echo "ERROR: Could not find SDK directory"
-          find / -name "sdkmanager" -type f 2>/dev/null | head -5
+          echo "Creating buildozer SDK directory..."
+          mkdir -p $BUILD_SDK
         fi
 
-    - name: Build APK (final attempt)
+    - name: Build APK with detailed logging
       run: |
-        echo "Starting final build..."
-        buildozer -v android debug
+        echo "=== Starting build with full logging ==="
+        set -x  # Enable command echoing
+        buildozer -v android debug 2>&1 | tee build.log
+        BUILD_EXIT_CODE=$?
+        set +x
+        
+        echo ""
+        echo "=== Build exit code: $BUILD_EXIT_CODE ==="
+        echo "Copying build-tools..."
+        cp -r $ANDROID_HOME/build-tools $BUILD_SDK/
+        
+        if [ $BUILD_EXIT_CODE -ne 0 ]; then
+          echo ""
+          echo "=== BUILD FAILED ==="
+          echo "Last 100 lines of build log:"
+          tail -100 build.log
+          echo ""
+          echo "Searching for errors in log:"
+          grep -i "error\|fail\|exception" build.log | tail -30
+        fi
+        echo "Copying platforms..."
+        cp -r $ANDROID_HOME/platforms $BUILD_SDK/
+        
+        exit $BUILD_EXIT_CODE
+        echo "Copying platform-tools..."
+        cp -r $ANDROID_HOME/platform-tools $BUILD_SDK/ 2>/dev/null || true
+        
+        echo "Copying cmdline-tools..."
+        cp -r $ANDROID_HOME/cmdline-tools $BUILD_SDK/
+        
+        echo ""
+        echo "=== Verifying copied SDK ==="
+        ls -la $BUILD_SDK/build-tools/31.0.0/aidl && echo "✓ AIDL copied successfully!"
+
+    - name: Build APK
+      run: |
+        echo "=== Starting final build ==="
+        echo "ANDROID_HOME=$ANDROID_HOME"
+        echo "Buildozer SDK=$HOME/.buildozer/android/platform/android-sdk"
+        buildozer -v android debug 2>&1 | tee build.log
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -99,12 +89,12 @@ jobs:
         path: bin/*.apk
         retention-days: 30
 
-    - name: Display error info
+    - name: Upload build log
+    - name: Upload logs on failure
+      uses: actions/upload-artifact@v4
       if: failure()
-      run: |
-        echo "=== Build Failed ==="
-        echo "Checking logs..."
-        find . -name "*.log" -type f -newer /tmp 2>/dev/null | head -10
-        find .buildozer -name "*.log" -type f 2>/dev/null | head -5
-        echo "Last 100 lines:"
-        find .buildozer -name "*.log" -type f -exec tail -100 {} \; 2>/dev/null | tail -100
+      with:
+        name: build-logs
+        path: |
+          build.log
+          init.log
