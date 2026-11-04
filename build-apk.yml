@@ -1,0 +1,86 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-pip \
+          build-essential \
+          git \
+          python3 \
+          python3-dev \
+          ffmpeg \
+          libsdl2-dev \
+          libsdl2-image-dev \
+          libsdl2-mixer-dev \
+          libsdl2-ttf-dev \
+          libportmidi-dev \
+          libswscale-dev \
+          libavformat-dev \
+          libavcodec-dev \
+          zlib1g-dev \
+          libgstreamer1.0-dev \
+          gstreamer1.0-plugins-base \
+          openjdk-17-jdk \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config \
+          libffi-dev
+
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip
+        pip install "buildozer==1.6.0" "cython==0.29.33"
+
+    - name: Prepare buildozer.spec
+      run: |
+        # 使用 buildozer_simple.spec 或创建新的
+        if [ -f "buildozer_simple.spec" ]; then
+          cp buildozer_simple.spec buildozer.spec
+        fi
+
+        # 强制设置正确的版本
+        sed -i 's/requirements\s*=.*/requirements = python3==3.11.9,kivy==2.3.1/' buildozer.spec
+        sed -i 's/android\.ndk\s*=.*/android.ndk = 25b/' buildozer.spec
+        sed -i 's/android\.api\s*=.*/android.api = 31/' buildozer.spec
+
+        echo "=== buildozer.spec 配置 ==="
+        cat buildozer.spec
+        echo "=========================="
+
+    - name: Build APK
+      run: |
+        echo "开始构建 APK..."
+        buildozer -v android debug
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: xuankongfeixing-apk
+        path: bin/*.apk
+        retention-days: 30
+
+    - name: Display APK info
+      run: |
+        echo "=== 构建完成 ==="
+        ls -lh bin/*.apk
+        echo "APK 文件已上传到 Artifacts"
